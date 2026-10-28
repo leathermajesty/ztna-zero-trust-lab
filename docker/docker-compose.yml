@@ -1,0 +1,129 @@
+# Zero Trust lab — identity stack + role-based apps.
+# Secrets come from .env (copy .env.example to .env and fill it in).
+# Run on the DMZ Docker host after Keycloak's ztna-lab realm is set up
+# (see ../docs/setup.md).
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev
+    environment:
+      # Bootstrap admin is only used the first time, to create a real admin.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # ---- the three web apps (plain PHP, each reads the headers the proxy sets) ----
+  portal:
+    image: php:8.2-apache
+    volumes:
+      - ./portal:/var/www/html:ro
+    restart: unless-stopped
+
+  faculty:
+    image: php:8.2-apache
+    volumes:
+      - ./faculty:/var/www/html:ro
+    restart: unless-stopped
+
+  admin:
+    image: php:8.2-apache
+    volumes:
+      - ./admin:/var/www/html:ro
+    restart: unless-stopped
+
+  # ---- one proxy per service; each enforces which role may enter ----
+  # Portal: anyone with a valid role (no role -> 403)
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    command:
+      - --provider=keycloak-oidc
+      - --oidc-issuer-url=http://${HOST_IP}:8080/realms/ztna-lab
+      - --client-id=app-proxy
+      - --client-secret=${CLIENT_SECRET}
+      - --cookie-secret=${COOKIE_SECRET}
+      - --email-domain=*
+      - --http-address=0.0.0.0:4180
+      - --upstream=http://portal:80
+      - --redirect-url=http://${HOST_IP}:4180/oauth2/callback
+      - --allowed-role=director
+      - --allowed-role=faculty
+      - --allowed-role=student
+      - --cookie-secure=false
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+    ports:
+      - "4180:4180"
+    depends_on:
+      - keycloak
+    restart: unless-stopped
+
+  # Faculty Zone: director + faculty only
+  oauth2-proxy-faculty:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    command:
+      - --provider=keycloak-oidc
+      - --oidc-issuer-url=http://${HOST_IP}:8080/realms/ztna-lab
+      - --client-id=app-proxy
+      - --client-secret=${CLIENT_SECRET}
+      - --cookie-secret=${COOKIE_SECRET}
+      - --cookie-name=_oauth2_proxy_fac
+      - --email-domain=*
+      - --http-address=0.0.0.0:4180
+      - --upstream=http://faculty:80
+      - --redirect-url=http://${HOST_IP}:4181/oauth2/callback
+      - --allowed-role=director
+      - --allowed-role=faculty
+      - --cookie-secure=false
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+    ports:
+      - "4181:4180"
+    depends_on:
+      - keycloak
+    restart: unless-stopped
+
+  # Admin Zone: director only
+  oauth2-proxy-admin:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    command:
+      - --provider=keycloak-oidc
+      - --oidc-issuer-url=http://${HOST_IP}:8080/realms/ztna-lab
+      - --client-id=app-proxy
+      - --client-secret=${CLIENT_SECRET}
+      - --cookie-secret=${COOKIE_SECRET}
+      - --cookie-name=_oauth2_proxy_adm
+      - --email-domain=*
+      - --http-address=0.0.0.0:4180
+      - --upstream=http://admin:80
+      - --redirect-url=http://${HOST_IP}:4182/oauth2/callback
+      - --allowed-role=director
+      - --cookie-secure=false
+      - --skip-provider-button=true
+      - --insecure-oidc-allow-unverified-email=true
+    ports:
+      - "4182:4180"
+    depends_on:
+      - keycloak
+    restart: unless-stopped
+
+volumes:
+  pgdata:

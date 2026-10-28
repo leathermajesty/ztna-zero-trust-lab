@@ -1,0 +1,14 @@
+# secrets — never commit these
+.env
+*.bak
+*.bak-*
+docker-compose.yml.bak*
+**/03-credentials.md
+**/credentials*.md
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+.obsidian/
